@@ -19,10 +19,43 @@ function fetchWithTimeout(url, options, timeout = 10000) {
   });
 }
 
+// Recursively replace Korean definition with English if present
+function replaceDefinitions(obj) {
+  if (typeof obj !== 'object' || obj === null) return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(item => replaceDefinitions(item));
+  }
+  const newObj = {};
+  for (const key in obj) {
+    if (key === 'sense') {
+      // sense can be an object or array
+      if (Array.isArray(obj.sense)) {
+        newObj.sense = obj.sense.map(s => {
+          if (s.definition_en) {
+            return { ...s, definition: s.definition_en };
+          }
+          return s;
+        });
+      } else if (obj.sense && typeof obj.sense === 'object') {
+        if (obj.sense.definition_en) {
+          newObj.sense = { ...obj.sense, definition: obj.sense.definition_en };
+        } else {
+          newObj.sense = obj.sense;
+        }
+      } else {
+        newObj.sense = obj.sense;
+      }
+    } else {
+      newObj[key] = replaceDefinitions(obj[key]);
+    }
+  }
+  return newObj;
+}
+
 export default async function handler(req, res) {
   const { q, test } = req.query;
 
-  // Simple test endpoint to confirm the function is alive
+  // Simple test endpoint
   if (test !== undefined) {
     return res.status(200).json({ message: 'Proxy is working', timestamp: Date.now() });
   }
@@ -34,7 +67,8 @@ export default async function handler(req, res) {
   const apiKey = '09039EB86949159AD9DFFB98AD411BBD';
   const decoded = decodeURIComponent(q);
   const encoded = encodeURIComponent(decoded);
-  const url = `https://krdict.korean.go.kr/api/search?key=${apiKey}&type_search=search&part=word&type=json&q=${encoded}`;
+  // Add lang=1 to request English definitions
+  const url = `https://krdict.korean.go.kr/api/search?key=${apiKey}&type_search=search&part=word&type=json&q=${encoded}&lang=1`;
 
   const requestUrl = new URL(url);
   const options = {
@@ -56,8 +90,10 @@ export default async function handler(req, res) {
     }
     const parsed = parser.parse(response.data);
     if (parsed && parsed.channel) {
+      // Replace Korean definitions with English where available
+      const modifiedChannel = replaceDefinitions(parsed.channel);
       res.setHeader('Content-Type', 'application/json');
-      res.status(200).send(JSON.stringify(parsed.channel));
+      res.status(200).send(JSON.stringify(modifiedChannel));
     } else {
       res.status(500).json({ error: 'Unexpected XML structure' });
     }
