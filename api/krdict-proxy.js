@@ -3,8 +3,30 @@ import { XMLParser } from 'fast-xml-parser';
 
 const parser = new XMLParser({ ignoreAttributes: false });
 
+// Helper function to make the request with timeout
+function fetchWithTimeout(url, options, timeout = 10000) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => resolve({ status: res.statusCode, data }));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeout, () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+  });
+}
+
 export default async function handler(req, res) {
-  const q = req.query.q;
+  const { q, test } = req.query;
+
+  // Simple test endpoint to confirm the function is alive
+  if (test !== undefined) {
+    return res.status(200).json({ message: 'Proxy is working', timestamp: Date.now() });
+  }
+
   if (!q) {
     return res.status(400).json({ error: 'Missing q parameter' });
   }
@@ -26,33 +48,21 @@ export default async function handler(req, res) {
     }
   };
 
-  return new Promise((resolve) => {
-    const request = https.get(options, (response) => {
-      let data = '';
-      response.on('data', chunk => { data += chunk; });
-      response.on('end', () => {
-        try {
-          const parsed = parser.parse(data);
-          if (parsed && parsed.channel) {
-            res.setHeader('Content-Type', 'application/json');
-            res.status(200).send(JSON.stringify(parsed.channel));
-          } else {
-            res.status(500).json({ error: 'Unexpected XML structure' });
-          }
-        } catch (err) {
-          console.error('XML parsing error:', err);
-          res.status(500).json({ error: 'Failed to parse XML', details: err.message });
-        }
-        resolve();
-      });
-    });
-
-    request.on('error', (err) => {
-      console.error('Proxy error:', err.message);
-      res.status(502).json({ error: 'Failed to fetch from KRDict', details: err.message });
-      resolve();
-    });
-
-    request.end();
-  });
+  try {
+    const response = await fetchWithTimeout(requestUrl, options, 8000);
+    if (response.status !== 200) {
+      console.error(`KRDict returned HTTP ${response.status}`);
+      return res.status(502).json({ error: `KRDict returned HTTP ${response.status}` });
+    }
+    const parsed = parser.parse(response.data);
+    if (parsed && parsed.channel) {
+      res.setHeader('Content-Type', 'application/json');
+      res.status(200).send(JSON.stringify(parsed.channel));
+    } else {
+      res.status(500).json({ error: 'Unexpected XML structure' });
+    }
+  } catch (err) {
+    console.error('Proxy error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch from KRDict', details: err.message });
+  }
 }
