@@ -1,7 +1,9 @@
 import express from 'express';
 import https from 'https';
+import { XMLParser } from 'fast-xml-parser';
 
 const app = express();
+const parser = new XMLParser({ ignoreAttributes: false });
 
 app.get('/krdict-proxy', async (req, res) => {
   const q = req.query.q;
@@ -14,40 +16,39 @@ app.get('/krdict-proxy', async (req, res) => {
   const encoded = encodeURIComponent(decoded);
   const url = `https://krdict.korean.go.kr/api/search?key=${apiKey}&type_search=search&part=word&type=json&q=${encoded}`;
 
-  // Use https.get with custom headers and HTTP/1.1
   const requestUrl = new URL(url);
-
   const options = {
     hostname: requestUrl.hostname,
     path: requestUrl.pathname + requestUrl.search,
     method: 'GET',
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+      'Accept': 'application/xml, text/xml, */*',
+      'Accept-Language': 'ko-KR,ko;q=0.9',
       'Connection': 'keep-alive'
-    },
-    // Force HTTP/1.1 (disable HTTP/2)
-    protocol: 'https:',
-    port: 443
+    }
   };
 
   const request = https.get(options, (response) => {
     let data = '';
     response.on('data', chunk => { data += chunk; });
     response.on('end', () => {
-      // Check if the response is JSON (original KRDict with type=json should return JSON)
-      // But KRDict sometimes returns XML even with type=json. We'll handle both.
-      res.set('Content-Type', 'application/json');
-      // Attempt to detect if it's JSON or XML
-      if (data.trim().startsWith('{')) {
-        res.send(data);
-      } else if (data.trim().startsWith('<')) {
-        // Convert XML to JSON (or just return as is for now)
-        // For simplicity, we'll return the XML wrapped in a JSON object
-        res.json({ xml: data });
-      } else {
-        res.json({ raw: data });
+      // KRDict returns XML even when type=json is requested.
+      // Parse the XML and convert to JSON.
+      try {
+        const parsed = parser.parse(data);
+        // The parsed structure has a top-level 'channel' object.
+        // We'll send that as the response so your VRChat script can use notesDataDictionary.
+        if (parsed && parsed.channel) {
+          res.set('Content-Type', 'application/json');
+          res.send(JSON.stringify(parsed.channel));
+        } else {
+          // Fallback: send the raw XML wrapped in a JSON object.
+          res.json({ xml: data });
+        }
+      } catch (err) {
+        console.error('XML parsing error:', err);
+        res.status(500).json({ error: 'Failed to parse XML response', details: err.message });
       }
     });
   });
